@@ -1,0 +1,99 @@
+CREATE PROCEDURE UpdateOrderStatusAndLog
+    @OrderID INT,
+    @NewStatus VARCHAR(20)
+AS
+BEGIN
+    DECLARE @OldStatus VARCHAR(20);
+ 
+    SELECT @OldStatus = Status FROM Orders WHERE OrderID = @OrderID;
+ 
+    IF @OldStatus IS NOT NULL AND @OldStatus <> @NewStatus
+    BEGIN
+        UPDATE Orders
+        SET Status = @NewStatus
+        WHERE OrderID = @OrderID;
+ 
+        INSERT INTO OrderStatusHistory (OrderID, OldStatus, NewStatus)
+        VALUES (@OrderID, @OldStatus, @NewStatus);
+    END
+END;
+
+
+CREATE PROCEDURE GenerateMonthlySalesReport
+    @Month INT,
+    @Year INT
+AS
+BEGIN
+    DECLARE @SellerID INT, @TotalSales DECIMAL(10,2);
+ 
+    DECLARE seller_cursor CURSOR FOR
+    SELECT SellerID FROM Sellers;
+ 
+    OPEN seller_cursor;
+    FETCH NEXT FROM seller_cursor INTO @SellerID;
+ 
+    WHILE @@FETCH_STATUS = 0
+    BEGIN
+        SELECT @TotalSales = SUM(TotalAmount)
+        FROM Orders
+        WHERE SellerID = @SellerID
+          AND MONTH(OrderDate) = @Month
+          AND YEAR(OrderDate) = @Year;
+ 
+        PRINT 'Sprzedawca: ' + CAST(@SellerID AS VARCHAR) +
+              ', Sprzedaż: ' + CAST(ISNULL(@TotalSales, 0) AS VARCHAR);
+ 
+        FETCH NEXT FROM seller_cursor INTO @SellerID;
+    END
+ 
+    CLOSE seller_cursor;
+    DEALLOCATE seller_cursor;
+END;
+
+
+
+
+
+
+
+CREATE PROCEDURE ArchiveOldOrders
+    @YearsAgo INT
+AS
+BEGIN
+    SET NOCOUNT ON;
+ 
+    DECLARE @CutoffDate DATE = DATEADD(YEAR, -@YearsAgo, GETDATE());
+ 
+    -- Wstaw dane do ArchivedOrders
+    INSERT INTO ArchivedOrders (
+        OrderID, CustomerID, EmployeeID, OrderDate, RequiredDate, ShippedDate,
+        ShipVia, Freight, ShipName, ShipAddress, ShipCity,
+        ShipRegion, ShipPostalCode, ShipCountry, ArchiveDate
+    )
+    SELECT 
+        OrderID, CustomerID, EmployeeID, OrderDate, RequiredDate, ShippedDate,
+        ShipVia, Freight, ShipName, ShipAddress, ShipCity,
+        ShipRegion, ShipPostalCode, ShipCountry, GETDATE()
+    FROM Orders
+    WHERE OrderDate < @CutoffDate;
+ 
+    -- Wstaw dane do ArchivedOrderDetails
+    INSERT INTO ArchivedOrderDetails (
+        OrderID, ProductID, UnitPrice, Quantity, Discount
+    )
+    SELECT 
+        od.OrderID, od.ProductID, od.UnitPrice, od.Quantity, od.Discount
+    FROM [Order Details] od
+    INNER JOIN Orders o ON od.OrderID = o.OrderID
+    WHERE o.OrderDate < @CutoffDate;
+ 
+    -- Usuń szczegóły zamówień
+    DELETE FROM [Order Details]
+    WHERE OrderID IN (
+        SELECT OrderID FROM Orders WHERE OrderDate < @CutoffDate
+    );
+ 
+    -- Usuń zamówienia
+    DELETE FROM Orders
+    WHERE OrderDate < @CutoffDate;
+END;
